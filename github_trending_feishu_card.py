@@ -112,7 +112,7 @@ def fetch_trending(
             except ValueError:
                 stars = None
 
-        # today / this week stars
+        # today / this week / this month stars（页面上的“X stars today/this week/this month”）
         stars_today_tag = item.find("span", class_="d-inline-block float-sm-right")
         stars_today = None
         if stars_today_tag:
@@ -182,6 +182,36 @@ def current_date_ms() -> int:
     return int(dt.timestamp() * 1000)
 
 
+def stars_field_name_for_since(since: str) -> str:
+    """
+    根据周期选择多维表字段名：
+    daily   -> TodayStars
+    weekly  -> ThisWeekStars
+    monthly -> ThisMonthStars
+    """
+    if since == "weekly":
+        return "ThisWeekStars"
+    elif since == "monthly":
+        return "ThisMonthStars"
+    else:
+        return "TodayStars"
+
+
+def stars_label_for_since(since: str) -> str:
+    """
+    用于卡片展示：
+    daily   -> today
+    weekly  -> this week
+    monthly -> this month
+    """
+    if since == "weekly":
+        return "this week"
+    elif since == "monthly":
+        return "this month"
+    else:
+        return "today"
+
+
 def build_bitable_records(
     repos: List[Dict],
     language: Optional[str],
@@ -190,14 +220,18 @@ def build_bitable_records(
 ) -> List[Dict[str, Any]]:
     """
     根据 Trending 列表构造 Bitable records.
+
     约定字段：
-      Rank, Repo, Owner, SpokenLanguage, Language, Stars, TodayStars,
+      Rank, Repo, Owner, SpokenLanguage, Language, Stars,
+      TodayStars / ThisWeekStars / ThisMonthStars（按周期三选一）,
       Description, URL(link/text), Date(ms), Source
     """
     records: List[Dict[str, Any]] = []
     date_ms = current_date_ms()
     source = build_source_tag(since, language)
-    spoken_language = "all"  # 你后续如果做 spoken_language_code，可以填真实值
+    spoken_language = "all"
+
+    stars_field = stars_field_name_for_since(since)
 
     for idx, repo in enumerate(repos[:limit], start=1):
         full_name = repo["name"]        # owner/repo
@@ -207,7 +241,7 @@ def build_bitable_records(
             owner, _repo_name = full_name, ""
 
         stars_val = repo["stars"] if repo["stars"] is not None else 0
-        today_val = repo["stars_today"] if repo["stars_today"] is not None else 0
+        inc_val = repo["stars_today"] if repo["stars_today"] is not None else 0
 
         fields = {
             "Rank": idx,
@@ -216,7 +250,8 @@ def build_bitable_records(
             "SpokenLanguage": spoken_language,
             "Language": repo["language"] or "",
             "Stars": stars_val,
-            "TodayStars": today_val,
+            # 只写入当前周期对应的字段
+            stars_field: inc_val,
             "Description": repo["description"] or "",
             "URL": {
                 "link": repo["url"],
@@ -280,6 +315,8 @@ def build_feishu_card(
     lang_label = language if language else "All Languages"
     header_title = f"📈 GitHub Trending · {since_label}"
 
+    inc_label = stars_label_for_since(since)
+
     # 顶部信息区（语言、周期、来源）
     elements: List[Dict] = [
         {
@@ -310,7 +347,7 @@ def build_feishu_card(
         if stars is not None:
             stars_part.append(f"⭐ {stars}")
         if stars_today is not None:
-            stars_part.append(f"+{stars_today} today")
+            stars_part.append(f"+{stars_today} {inc_label}")
         stars_str = " · ".join(stars_part) if stars_part else "stars: N/A"
 
         # 描述太长就截断
@@ -412,11 +449,23 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Feishu webhook URL. If omitted, will read FEISHU_WEBHOOK_URL env.",
     )
+    parser.add_argument(
+        "--monday-only",
+        action="store_true",
+        help="Only run when today is Monday; otherwise exit without doing anything.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+
+    # 如果指定了只在周一执行，就检查当前是否周一（weekday(): Monday=0, Sunday=6）
+    if args.monday_only:
+        today = datetime.now().weekday()
+        if today != 0:
+            print("[INFO] --monday-only is set and today is not Monday; skip execution.", file=sys.stderr)
+            sys.exit(0)
 
     webhook_url = args.webhook or os.getenv("FEISHU_WEBHOOK_URL")
     if not webhook_url:
