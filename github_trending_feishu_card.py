@@ -159,22 +159,6 @@ def get_tenant_access_token() -> str:
     return data["tenant_access_token"]
 
 
-def build_source_tag(since: str, language: Optional[str]) -> str:
-    """构造 Source 字段，带时间粒度标签."""
-    now = datetime.now(timezone.utc)
-    lang_key = (language or "all").lower()
-
-    if since == "weekly":
-        year, week, _ = now.isocalendar()
-        return f"github-trending:weekly:{year}-W{week:02d}:{lang_key}"
-    elif since == "monthly":
-        month_tag = now.strftime("%Y-%m")
-        return f"github-trending:monthly:{month_tag}:{lang_key}"
-    else:  # daily
-        day_tag = now.strftime("%Y-%m-%d")
-        return f"github-trending:daily:{day_tag}:{lang_key}"
-
-
 def current_date_ms() -> int:
     """生成当天 00:00:00 UTC 的毫秒级时间戳，作为 Date 字段."""
     today = datetime.now(timezone.utc).date()
@@ -228,7 +212,6 @@ def build_bitable_records(
     """
     records: List[Dict[str, Any]] = []
     date_ms = current_date_ms()
-    source = build_source_tag(since, language)
     spoken_language = "all"
 
     stars_field = stars_field_name_for_since(since)
@@ -258,7 +241,6 @@ def build_bitable_records(
                 "text": full_name,
             },
             "Date": date_ms,
-            "Source": source,
         }
         records.append({"fields": fields})
 
@@ -454,6 +436,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Only run when today is Monday; otherwise exit without doing anything.",
     )
+    parser.add_argument(
+        "--monthly-only",
+        action="store_true",
+        help="Only run when today is the first day of the month; otherwise exit without doing anything.",
+    )
     return parser.parse_args()
 
 
@@ -465,6 +452,12 @@ def main() -> None:
         today = datetime.now().weekday()
         if today != 0:
             print("[INFO] --monday-only is set and today is not Monday; skip execution.", file=sys.stderr)
+            sys.exit(0)
+    # 如果指定了只在每月的一号执行，就检查当前是否一号（day(): 1-31）
+    if args.monthly_only:
+        today = datetime.now().day
+        if today != 1:
+            print("[INFO] --monthly-only is set and today is not the first day of the month; skip execution.", file=sys.stderr)
             sys.exit(0)
 
     webhook_url = args.webhook or os.getenv("FEISHU_WEBHOOK_URL")
